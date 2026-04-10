@@ -1,7 +1,8 @@
 ########################################################
 # [Calibration.py]
-# Kamerakalibrierung und Bildentzerrung der Testbilder 
-# ToDo: Debug Anzeigen evtl. in eigene Funktion
+# Kamerakalibrierung: Berechnet aus Fotos eines
+# Schachbrettmusters (ChArUco-Board) die Kameramatrix
+# und Verzerrungskoeffizienten und speichert sie ab.
 ########################################################
 
 #%%
@@ -18,25 +19,33 @@ from set_params import (
     SQUARE_LENGTH,
     SQUARES_HORIZONTALLY,
     SQUARES_VERTICALLY,
-) # Einladen der definierten Parameter und Pfade
+    check_opencv_version,
+) # Einladen der definierten Parameter, Pfade und des Versionschecks
 
-# -- 16 zu 9 Visualisierungen mit 150ms WaitKey -- 
+# Prüfe beim Start, ob eine ausreichend neue OpenCV-Version installiert ist
+check_opencv_version()
+
+
+# Hilfsfunktion: Bild auf 16:9-Vorschaugröße verkleinern
 def to_16_9_preview(image):
     return cv2.resize(image, PREVIEW_SIZE, interpolation=cv2.INTER_AREA)
 
-# Anzeige der detektierten Ecken (Input: Markierte Ecken des Checkerboards)
+
+# Zeigt während der Kalibrierung kurz an, welche Ecken des Boards erkannt wurden
 def show_detection_debug_preview(debug_image):
     cv2.imshow('Detection Debug', to_16_9_preview(debug_image))
     cv2.waitKey(150)
 
-# Anzeige der Bilder nach Linsenkorrektur (Input: entzerrtes Bild)
+
+# Zeigt die entzerrten Kalibrierbilder kurz als Vorschau an
 def show_undistorted_preview(undistorted_image):
     undistorted_preview = cv2.resize(
-        undistorted_image,  PREVIEW_SIZE, interpolation=cv2.INTER_AREA)
+        undistorted_image, PREVIEW_SIZE, interpolation=cv2.INTER_AREA)
     cv2.imshow('Undistorted Image', undistorted_preview)
     cv2.waitKey(150)
 
 
+# Berechnet und druckt den Reprojektionsfehler pro Bild (je kleiner, desto besser)
 def print_per_image_rms(
     object_points,
     image_points,
@@ -46,7 +55,7 @@ def print_per_image_rms(
     dist_coeffs,
     image_labels,
 ):
-    print("\nPer-image RMS reprojection error:")
+    print("\nReprojektionsfehler pro Bild (RMS):")
     for i in range(len(rvecs)):
         projected_points, _ = cv2.projectPoints(
             object_points[i],
@@ -62,42 +71,29 @@ def print_per_image_rms(
         label = image_labels[i] if i < len(image_labels) else f"frame_{i:02d}"
         print(f"{label}: {rms:.6f}")
 
-# Funktionskopf der eigentlichen Kalibrierungsfunktion mit Option, dass Debug nicht angezeigt wird:
 
-# Funktionsaufruf ohne Debug:
-
-# calibrate_and_save_parameters(
-#     show_debug=False,
-#     show_undistorted=False
-# )
-
+# Hauptfunktion: Liest Kalibrierbilder ein, erkennt das Board,
+# berechnet die Kameraparameter und speichert sie.
 def calibrate_and_save_parameters(
     show_detection_previews=True,
     show_undistorted_previews=True,
-    show_debug=None,
-    show_undistorted=None,
 ):
-    if show_debug is not None:
-        show_detection_previews = show_debug
-    if show_undistorted is not None:
-        show_undistorted_previews = show_undistorted
-
-
-    # Definition des Checkerboards -- MUSS gleiche Dimensionen wie aus BoardGen.py haben 
+    # Schachbrettmuster (ChArUco-Board) definieren –
+    # muss identisch mit dem in BoardGen.py erstellten Board sein
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
     board = cv2.aruco.CharucoBoard(
         (SQUARES_VERTICALLY, SQUARES_HORIZONTALLY),
         SQUARE_LENGTH, MARKER_LENGTH,
         dictionary)
-    
-    # Speichern von Parametern
-    params = cv2.aruco.DetectorParameters()
 
+    # Detektor für ArUco-Marker erstellen
+    params = cv2.aruco.DetectorParameters()
     aruco_detector = cv2.aruco.ArucoDetector(dictionary, params)
 
+    # Detektor für ChArUco-Ecken (Schnittpunkte der Schachbrettfelder) erstellen
     charuco_detector = cv2.aruco.CharucoDetector(board)
 
-    # Laden der Bilder
+    # Alle Kalibrierbilder aus dem Ordner laden
     image_files = [
         os.path.join(str(CAL_IMAGES_DIR), f)
         for f in os.listdir(CAL_IMAGES_DIR)
@@ -105,85 +101,60 @@ def calibrate_and_save_parameters(
     ]
     image_files.sort()
 
+    # Listen zum Sammeln der erkannten Punkte über alle Bilder hinweg
     all_charuco_corners = []
     all_charuco_ids = []
-    all_object_points = []
-    all_image_points = []
+    all_object_points = []  # 3D-Weltpunkte
+    all_image_points = []   # 2D-Bildpunkte
     used_image_labels = []
 
-    image_size = None  
+    image_size = None  # Wird beim ersten Bild gesetzt (Breite, Höhe)
 
     for image_file in image_files:
         image = cv2.imread(image_file)
-        debug_draw = image.copy()
-        charuco_retval = 0
-        charuco_corners = None
-        charuco_ids = None
-        
-        # OpenCV calibration expects (width, height)
+        debug_draw = image.copy()  # Kopie für die farbige Einzeichnung der Erkennung
+
+        # Bildgröße beim ersten Bild speichern (OpenCV erwartet Breite × Höhe)
         if image_size is None:
             image_size = (image.shape[1], image.shape[0])
-        
-        
-        # Kompatibel mit unterschiedlichen OpenCV Versionen
-        if aruco_detector is not None:
-            marker_corners, marker_ids, _ = aruco_detector.detectMarkers(image)
-        else:
-            marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(
-                image, dictionary, parameters=params
-            )
+
+        # Schritt 1: ArUco-Marker im Bild suchen
+        marker_corners, marker_ids, _ = aruco_detector.detectMarkers(image)
 
         if marker_ids is not None and len(marker_ids) > 0:
+            # Erkannte Marker zur Kontrolle einzeichnen
             cv2.aruco.drawDetectedMarkers(debug_draw, marker_corners, marker_ids)
 
-
-        # Ebenfalls für mehrere OpenCV Versionen
-        if marker_ids is not None and len(marker_ids) > 0:
-            if hasattr(cv2.aruco, "interpolateCornersCharuco"):
-                charuco_retval, charuco_corners, charuco_ids = \
-                    cv2.aruco.interpolateCornersCharuco(
-                        marker_corners, marker_ids, image, board
-                    )
-            elif charuco_detector is not None:
-                # New API fallback in newer OpenCV builds
-                detected = charuco_detector.detectBoard(image)
-
-                charuco_corners = None
-                charuco_ids = None
-                if isinstance(detected, tuple):
-                    if len(detected) >= 2:
-                        charuco_corners, charuco_ids = detected[0], detected[1]
-                charuco_retval = 0 if charuco_ids is None else len(charuco_ids)
-            else:
-                raise RuntimeError(
-                    "Your OpenCV build lacks both interpolateCornersCharuco and CharucoDetector. "
-                    "Install a newer opencv-contrib-python package."
-                )
+            # Schritt 2: Aus den erkannten Markern die Schachbrett-Ecken berechnen
+            # (Die ersten beiden Rückgabewerte sind immer Ecken und IDs)
+            detected = charuco_detector.detectBoard(image)
+            charuco_corners, charuco_ids = detected[0], detected[1]
+            charuco_retval = 0 if charuco_ids is None else len(charuco_ids)
 
             if (
                 charuco_retval
-                and hasattr(cv2.aruco, "drawDetectedCornersCharuco")
                 and charuco_corners is not None
                 and charuco_ids is not None
             ):
                 cv2.aruco.drawDetectedCornersCharuco(
                     debug_draw, charuco_corners, charuco_ids, (0, 255, 0)
                 )
+        else:
+            charuco_corners = None
+            charuco_ids = None
+            charuco_retval = 0
 
+        # Nur Bilder verwenden, in denen mindestens 4 Ecken erkannt wurden
         if charuco_retval and charuco_ids is not None and len(charuco_ids) >= 4:
-            # Match 3D-Objektpunkte zu 2D-Bildpunkten für genau dieses Bild
+            # 3D-Weltpunkte den erkannten 2D-Bildpunkten zuordnen
             obj_pts, img_pts = board.matchImagePoints(charuco_corners, charuco_ids)
 
             if obj_pts is not None and img_pts is not None:
                 all_charuco_corners.append(charuco_corners)
                 all_charuco_ids.append(charuco_ids)
-
-                # NEU – für RMS pro Bild
                 all_object_points.append(obj_pts)
                 all_image_points.append(img_pts)
                 used_image_labels.append(os.path.basename(image_file))
-                
-                
 
         if show_detection_previews:
             cv2.putText(
@@ -197,80 +168,36 @@ def calibrate_and_save_parameters(
                 cv2.LINE_AA,
             )
             show_detection_debug_preview(debug_draw)
-   
-    # Safety check
-    if len(all_charuco_corners) == 0:
-        raise RuntimeError("No ChArUco corners detected in any image!")
 
+    # Prüfen, ob überhaupt auswertbare Bilder gefunden wurden
+    if len(all_object_points) == 0:
+        raise RuntimeError("In keinem Bild wurden ChArUco-Ecken erkannt!")
 
-    # Calibrate camera
-    if hasattr(cv2.aruco, "calibrateCameraCharuco"):
-        retval, camera_matrix, dist_coeffs, rvecs, tvecs = \
-            cv2.aruco.calibrateCameraCharuco(
-                all_charuco_corners,
-                all_charuco_ids,
-                board,
-                image_size,
-                None,
-                None
-            )
-        print_per_image_rms(
-            all_object_points,
-            all_image_points,
-            rvecs,
-            tvecs,
-            camera_matrix,
-            dist_coeffs,
-            used_image_labels,
-        )
-        print(f"\nOverall RMS reprojection error: {retval:.6f}")
-        
+    # Kamera kalibrieren: Berechnet Kameramatrix und Verzerrungskoeffizienten
+    retval, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
+        all_object_points,
+        all_image_points,
+        image_size,
+        None,
+        None,
+    )
 
+    print_per_image_rms(
+        all_object_points,
+        all_image_points,
+        rvecs,
+        tvecs,
+        camera_matrix,
+        dist_coeffs,
+        used_image_labels,
+    )
+    print(f"\nGesamter RMS-Reprojektionsfehler: {retval:.6f}")
 
-    else:
-        # Fallback using standard calibrateCamera with matched ChArUco points
-        if not hasattr(board, "matchImagePoints"):
-            raise RuntimeError(
-                "Your OpenCV build lacks calibrateCameraCharuco and board.matchImagePoints. "
-                "Install a compatible opencv-contrib-python package."
-            )
-
-        object_points = []
-        image_points = []
-        for charuco_corners, charuco_ids in zip(all_charuco_corners, all_charuco_ids):
-            obj_pts, img_pts = board.matchImagePoints(charuco_corners, charuco_ids)
-            if obj_pts is not None and img_pts is not None and len(obj_pts) >= 4:
-                object_points.append(obj_pts)
-                image_points.append(img_pts)
-
-        if len(object_points) == 0:
-            raise RuntimeError("Not enough valid ChArUco point sets for camera calibration.")
-
-        retval, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
-            object_points,
-            image_points,
-            image_size,
-            None,
-            None
-        )
-
-        fallback_labels = [f"used_frame_{i:02d}" for i in range(len(object_points))]
-        print_per_image_rms(
-            object_points,
-            image_points,
-            rvecs,
-            tvecs,
-            camera_matrix,
-            dist_coeffs,
-            fallback_labels,
-        )
-        print(f"\nOverall RMS reprojection error: {retval:.6f}")
-
-    # Save calibration data
+    # Kalibrierungsdaten speichern
     np.save(str(CAMERA_MATRIX_PATH), camera_matrix)
     np.save(str(DIST_COEFFS_PATH), dist_coeffs)
-    
-    # Show undistorted previews
+
+    # Entzerrte Vorschauen anzeigen (optional)
     if show_undistorted_previews:
         for image_file in image_files:
             image = cv2.imread(image_file)
@@ -282,20 +209,19 @@ def calibrate_and_save_parameters(
         "camera_matrix_path": str(CAMERA_MATRIX_PATH),
         "dist_coeffs_path": str(DIST_COEFFS_PATH),
         "image_count": len(image_files),
-        "detected_frame_count": len(all_charuco_corners),
+        "detected_frame_count": len(all_object_points),
         "rms": float(retval),
     }
-    
-    
-# Only run automatically when this file is started directly.
+
+
+# Wird nur ausgeführt, wenn diese Datei direkt gestartet wird (nicht bei Import)
 if __name__ == "__main__":
     result = calibrate_and_save_parameters()
     print("RMS:", result["rms"])
-    print("used calibration pictures:", result["image_count"])
-    print("Detected frames:", result["detected_frame_count"])
-    print("camera_matrix:",np.load(CAMERA_MATRIX_PATH))
-    print("distortion coefficient:",np.load(DIST_COEFFS_PATH))
-    
-    
+    print("Verwendete Kalibrierbilder:", result["image_count"])
+    print("Ausgewertete Frames:", result["detected_frame_count"])
+    print("Kameramatrix:", np.load(CAMERA_MATRIX_PATH))
+    print("Verzerrungskoeffizienten:", np.load(DIST_COEFFS_PATH))
+
 
 # %%

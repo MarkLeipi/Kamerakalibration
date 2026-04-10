@@ -1,12 +1,38 @@
 ##########################################################
 # [set_params.py]
-# Feste Parameter/ Speicherorte etc. 
+# Feste Parameter und Speicherorte für das gesamte Projekt.
+# Hier werden alle Einstellungen an einem Ort gesammelt,
+# damit du sie leicht anpassen kannst.
 ##########################################################
 
 
 from pathlib import Path
 
 import cv2
+
+
+def check_opencv_version():
+    """
+    Prüft, ob die installierte OpenCV-Version mindestens 4.7.0 ist.
+    Diese Version wird benötigt, damit alle verwendeten Funktionen
+    (z.B. ArucoDetector, CharucoDetector) verfügbar sind.
+    Falls die Version zu alt ist, wird das Programm mit einer
+    verständlichen Fehlermeldung beendet.
+    """
+    version_str = cv2.__version__
+    parts = version_str.split(".")
+    try:
+        major, minor = int(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        raise RuntimeError(
+            f"OpenCV-Version konnte nicht gelesen werden: '{version_str}'"
+        )
+    if (major, minor) < (4, 7):
+        raise RuntimeError(
+            f"Deine OpenCV-Version ({version_str}) ist zu alt.\n"
+            "Mindestens Version 4.7.0 wird benötigt.\n"
+            "Bitte aktualisieren mit: pip install --upgrade opencv-contrib-python"
+        )
 
 # -- FILE MANAGEMENT --
 BASE_DIR = Path(__file__).resolve().parent 

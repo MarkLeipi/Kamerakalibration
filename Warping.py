@@ -12,13 +12,19 @@ from set_params import (
     SQUARES_X,
     SQUARES_Y,
     SQUARE_LENGTH,
+    check_opencv_version,
 )
 
-# 16 zu 9 Ansicht
+# Prüfe beim Start, ob eine ausreichend neue OpenCV-Version installiert ist
+check_opencv_version()
+
+
+# Hilfsfunktion: Bild auf 16:9-Vorschaugröße verkleinern
 def to_16_9_preview(image):
     return cv2.resize(image, PREVIEW_SIZE, interpolation=cv2.INTER_AREA)
 
-# Debug-Anzeigen
+
+# Zeigt drei Vorschaufenster an: entzerrtes Bild, erkannte Marker und das Ergebnis-Draufsichtbild
 def show_debug_preview_windows(undistorted_image, debug_image, rectified_image):
     cv2.imshow("Undistorted", to_16_9_preview(undistorted_image))
     cv2.imshow("Detections (debug)", to_16_9_preview(debug_image))
@@ -26,7 +32,9 @@ def show_debug_preview_windows(undistorted_image, debug_image, rectified_image):
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
-# Eigentliche Funktion
+
+# Hauptfunktion: Berechnet die Homographie-Matrix (Draufsicht-Transformation)
+# aus einem Messbild mit ChArUco-Board und speichert das entzerrte Draufsichtbild.
 def compute_topview_homography(
     image_path=str(DEFAULT_WARP_IMAGE_PATH),
     camera_matrix_path=None,
@@ -35,25 +43,25 @@ def compute_topview_homography(
     homography_path=str(HOMOGRAPHY_PATH),
     pixels_per_meter=2000.0,
     show_debug_previews=True,
-    show_preview=None,
 ):
-    if show_preview is not None:
-        show_debug_previews = show_preview
-
     if camera_matrix_path is None:
         camera_matrix_path = str(CAMERA_MATRIX_PATH)
     if dist_coeffs_path is None:
         dist_coeffs_path = str(DIST_COEFFS_PATH)
 
+    # Gespeicherte Kalibrierungsdaten laden
     camera_matrix = np.load(camera_matrix_path)
     dist_coeffs = np.load(dist_coeffs_path)
 
+    # Messbild laden und auf Verzerrung prüfen
     img = cv2.imread(image_path)
     if img is None:
-        raise FileNotFoundError(f"Image not found at '{image_path}'")
+        raise FileNotFoundError(f"Bild nicht gefunden: '{image_path}'")
 
+    # Linsenverzerrung aus dem Bild entfernen
     un_img = cv2.undistort(img, camera_matrix, dist_coeffs)
 
+    # ChArUco-Board definieren (muss identisch mit dem gedruckten Board sein)
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
     board = cv2.aruco.CharucoBoard(
         (SQUARES_X, SQUARES_Y),
@@ -63,46 +71,29 @@ def compute_topview_homography(
     )
     all_board_corners = board.getChessboardCorners()
 
-    if hasattr(cv2.aruco, "DetectorParameters"):
-        detector_params = cv2.aruco.DetectorParameters()
-    else:
-        detector_params = cv2.aruco.DetectorParameters_create()
-
-    if hasattr(cv2.aruco, "ArucoDetector"):
-        detector = cv2.aruco.ArucoDetector(dictionary, detector_params)
-        marker_corners, marker_ids, _ = detector.detectMarkers(un_img)
-    else:
-        marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(
-            un_img, dictionary, parameters=detector_params
-        )
+    # ArUco-Marker im entzerrten Bild erkennen
+    detector_params = cv2.aruco.DetectorParameters()
+    detector = cv2.aruco.ArucoDetector(dictionary, detector_params)
+    marker_corners, marker_ids, _ = detector.detectMarkers(un_img)
 
     if marker_ids is None or len(marker_ids) == 0:
-        raise RuntimeError("No ArUco markers detected!")
+        raise RuntimeError("Keine ArUco-Marker im Bild gefunden!")
 
+    # Erkannte Marker zur Kontrolle einzeichnen
     debug_draw = un_img.copy()
     cv2.aruco.drawDetectedMarkers(debug_draw, marker_corners, marker_ids)
 
-    if hasattr(cv2.aruco, "interpolateCornersCharuco"):
-        retval, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
-            marker_corners, marker_ids, un_img, board
-        )
-    elif hasattr(cv2.aruco, "CharucoDetector"):
-        charuco_detector = cv2.aruco.CharucoDetector(board)
-        detected = charuco_detector.detectBoard(un_img)
-        charuco_corners = None
-        charuco_ids = None
-        if isinstance(detected, tuple) and len(detected) >= 2:
-            charuco_corners, charuco_ids = detected[0], detected[1]
-        retval = 0 if charuco_ids is None else len(charuco_ids)
-    else:
-        raise RuntimeError(
-            "Your OpenCV build lacks both interpolateCornersCharuco and CharucoDetector."
-        )
+    # Aus den erkannten Markern die Schachbrett-Ecken (ChArUco-Ecken) berechnen
+    # (Die ersten beiden Rückgabewerte sind immer Ecken und IDs)
+    charuco_detector = cv2.aruco.CharucoDetector(board)
+    detected = charuco_detector.detectBoard(un_img)
+    charuco_corners, charuco_ids = detected[0], detected[1]
+    retval = 0 if charuco_ids is None else len(charuco_ids)
 
+    if charuco_ids is None or retval < 4:
+        raise RuntimeError("Nicht genug ChArUco-Ecken erkannt (mindestens 4 nötig)!")
 
-    if charuco_ids is None or retval is None or retval < 4:
-        raise RuntimeError("Not enough ChArUco corners detected!")
-
+    # Bildpunkte (2D) den bekannten Board-Punkten (2D in Metern) zuordnen
     img_pts = []
     board_pts = []
     for i in range(len(charuco_ids)):
@@ -115,12 +106,14 @@ def compute_topview_homography(
         board_pts.append(board_xy)
 
     if len(img_pts) < 4:
-        raise RuntimeError("Fewer than 4 valid ChArUco correspondences after filtering.")
+        raise RuntimeError("Weniger als 4 gültige ChArUco-Ecken nach dem Filtern.")
 
     img_pts = np.array(img_pts, dtype=np.float32)
     board_pts = np.array(board_pts, dtype=np.float32)
+    # Board-Koordinaten von Metern in Pixel umrechnen
     board_pts_px = board_pts * pixels_per_meter
 
+    # Homographie berechnen: Transformation vom Kamerabild in die Draufsicht
     H, inliers = cv2.findHomography(
         img_pts,
         board_pts_px,
@@ -128,8 +121,9 @@ def compute_topview_homography(
         ransacReprojThreshold=2.0,
     )
     if H is None:
-        raise RuntimeError("Homography estimation failed.")
+        raise RuntimeError("Homographie-Berechnung fehlgeschlagen.")
 
+    # Homographie mit nur den als gut eingestuften Punkten verfeinern
     if inliers is not None and inliers.sum() >= 4 and inliers.sum() < len(inliers):
         img_pts_in = img_pts[inliers.ravel() == 1]
         board_pts_px_in = board_pts_px[inliers.ravel() == 1]
@@ -137,11 +131,13 @@ def compute_topview_homography(
         if H_refined is not None:
             H = H_refined
 
+    # Ausgabegröße des Draufsichtbilds berechnen
     squaresX, squaresY = board.getChessboardSize()
     square_length_m = board.getSquareLength()
     w = int(round(squaresX * square_length_m * pixels_per_meter))
     h = int(round(squaresY * square_length_m * pixels_per_meter))
 
+    # Bild in die Draufsicht transformieren
     rectified = cv2.warpPerspective(un_img, H, (w, h))
 
     cv2.putText(
@@ -158,6 +154,7 @@ def compute_topview_homography(
     if show_debug_previews:
         show_debug_preview_windows(un_img, debug_draw, rectified)
 
+    # Ergebnisse speichern
     cv2.imwrite(output_image_path, rectified)
     np.save(homography_path, H)
 
@@ -170,9 +167,7 @@ def compute_topview_homography(
     }
 
 
-# Only run automatically when this file is started directly.
+# Wird nur ausgeführt, wenn diese Datei direkt gestartet wird (nicht bei Import)
 if __name__ == "__main__":
     result = compute_topview_homography()
-    print(f"Output rectified resolution = {result['rectified_size'][0]} x {result['rectified_size'][1]} px")
-    print(f"Originalgröße:")
-    
+    print(f"Ausgabeauflösung = {result['rectified_size'][0]} x {result['rectified_size'][1]} px")
