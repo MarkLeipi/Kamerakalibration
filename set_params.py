@@ -30,8 +30,7 @@ ARUCO_DICT = cv2.aruco.DICT_6X6_250 # 6x6 ArUco Marker aus 250 verschiedenen, ro
 # -- Checkerboard Dimensionen --
 SQUARES_VERTICALLY = 7
 SQUARES_HORIZONTALLY = 5 
-SQUARES_X = SQUARES_VERTICALLY 
-SQUARES_Y = SQUARES_HORIZONTALLY 
+
 SQUARE_LENGTH = 0.02 # 3cm pro Square
 MARKER_LENGTH = 0.01 # 1,5 cm großer Marker
 LENGTH_PX = 640

@@ -15,8 +15,8 @@ def main():
     print("=== STEP 1: Kamera-Kalibrierung ===")
 
     calib_result = calibrate_and_save_parameters(
-        show_debug=True,
-        show_undistorted=True,
+        show_detection_previews=True,
+        show_undistorted_previews=True,
     )
 
     print("Kalibrierung abgeschlossen:")

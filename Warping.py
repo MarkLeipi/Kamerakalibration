@@ -9,16 +9,14 @@ from set_params import (
     MARKER_LENGTH,
     PREVIEW_SIZE,
     RECTIFIED_TOP_VIEW_PATH,
-    SQUARES_X,
-    SQUARES_Y,
+    SQUARES_HORIZONTALLY,
+    SQUARES_VERTICALLY,
     SQUARE_LENGTH,
 )
 
-# 16 zu 9 Ansicht
 def to_16_9_preview(image):
     return cv2.resize(image, PREVIEW_SIZE, interpolation=cv2.INTER_AREA)
 
-# Debug-Anzeigen
 def show_debug_preview_windows(undistorted_image, debug_image, rectified_image):
     cv2.imshow("Undistorted", to_16_9_preview(undistorted_image))
     cv2.imshow("Detections (debug)", to_16_9_preview(debug_image))
@@ -29,22 +27,13 @@ def show_debug_preview_windows(undistorted_image, debug_image, rectified_image):
 # Eigentliche Funktion
 def compute_topview_homography(
     image_path=str(DEFAULT_WARP_IMAGE_PATH),
-    camera_matrix_path=None,
-    dist_coeffs_path=None,
+    camera_matrix_path=str(CAMERA_MATRIX_PATH),
+    dist_coeffs_path=str(DIST_COEFFS_PATH),
     output_image_path=str(RECTIFIED_TOP_VIEW_PATH),
     homography_path=str(HOMOGRAPHY_PATH),
     pixels_per_meter=2000.0,
     show_debug_previews=True,
-    show_preview=None,
 ):
-    if show_preview is not None:
-        show_debug_previews = show_preview
-
-    if camera_matrix_path is None:
-        camera_matrix_path = str(CAMERA_MATRIX_PATH)
-    if dist_coeffs_path is None:
-        dist_coeffs_path = str(DIST_COEFFS_PATH)
-
     camera_matrix = np.load(camera_matrix_path)
     dist_coeffs = np.load(dist_coeffs_path)
 
@@ -56,25 +45,15 @@ def compute_topview_homography(
 
     dictionary = cv2.aruco.getPredefinedDictionary(ARUCO_DICT)
     board = cv2.aruco.CharucoBoard(
-        (SQUARES_X, SQUARES_Y),
+        (SQUARES_VERTICALLY, SQUARES_HORIZONTALLY),
         SQUARE_LENGTH,
         MARKER_LENGTH,
         dictionary
     )
     all_board_corners = board.getChessboardCorners()
 
-    if hasattr(cv2.aruco, "DetectorParameters"):
-        detector_params = cv2.aruco.DetectorParameters()
-    else:
-        detector_params = cv2.aruco.DetectorParameters_create()
-
-    if hasattr(cv2.aruco, "ArucoDetector"):
-        detector = cv2.aruco.ArucoDetector(dictionary, detector_params)
-        marker_corners, marker_ids, _ = detector.detectMarkers(un_img)
-    else:
-        marker_corners, marker_ids, _ = cv2.aruco.detectMarkers(
-            un_img, dictionary, parameters=detector_params
-        )
+    detector = cv2.aruco.ArucoDetector(dictionary, cv2.aruco.DetectorParameters())
+    marker_corners, marker_ids, _ = detector.detectMarkers(un_img)
 
     if marker_ids is None or len(marker_ids) == 0:
         raise RuntimeError("No ArUco markers detected!")
@@ -82,22 +61,10 @@ def compute_topview_homography(
     debug_draw = un_img.copy()
     cv2.aruco.drawDetectedMarkers(debug_draw, marker_corners, marker_ids)
 
-    if hasattr(cv2.aruco, "interpolateCornersCharuco"):
-        retval, charuco_corners, charuco_ids = cv2.aruco.interpolateCornersCharuco(
-            marker_corners, marker_ids, un_img, board
-        )
-    elif hasattr(cv2.aruco, "CharucoDetector"):
-        charuco_detector = cv2.aruco.CharucoDetector(board)
-        detected = charuco_detector.detectBoard(un_img)
-        charuco_corners = None
-        charuco_ids = None
-        if isinstance(detected, tuple) and len(detected) >= 2:
-            charuco_corners, charuco_ids = detected[0], detected[1]
-        retval = 0 if charuco_ids is None else len(charuco_ids)
-    else:
-        raise RuntimeError(
-            "Your OpenCV build lacks both interpolateCornersCharuco and CharucoDetector."
-        )
+    charuco_detector = cv2.aruco.CharucoDetector(board)
+    detected = charuco_detector.detectBoard(un_img)
+    charuco_corners, charuco_ids = detected[0], detected[1]
+    retval = 0 if charuco_ids is None else len(charuco_ids)
 
 
     if charuco_ids is None or retval is None or retval < 4:
@@ -174,5 +141,4 @@ def compute_topview_homography(
 if __name__ == "__main__":
     result = compute_topview_homography()
     print(f"Output rectified resolution = {result['rectified_size'][0]} x {result['rectified_size'][1]} px")
-    print(f"Originalgröße:")
-    
+
