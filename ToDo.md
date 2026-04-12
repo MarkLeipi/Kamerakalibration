@@ -7,5 +7,6 @@
 - Warping testen mit einem anderen Bild in derselben Ebene
 - Debug Namen ändern in calibration_debug
 - Was passiert in openCV_support.py? 
-
 - Check ob richtige Version von OpenCV installiert ist? 
+
+- Warping reduzieren

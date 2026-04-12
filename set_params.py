@@ -23,12 +23,12 @@ RECTIFIED_OUTPUT_DIR = OUTPUTS_DIR / "rectified"
 
 
 # Einzelne Dateien
-CHARUCO_BOARD_IMAGE_PATH = BASE_DIR / "ChArUco_Marker.png"
-DEFAULT_WARP_IMAGE_PATH = WARP_IMAGES_DIR / "1.jpg"
+CHARUCO_BOARD_IMAGE_PATH = BASE_DIR / "ChArUco_Marker.png"  # ===== OPTIONAL ZUM ENTFERNEN ===== Nur wenn BoardGen.py nicht verwendet wird
+DEFAULT_WARP_IMAGE_PATH = WARP_IMAGES_DIR / "1.jpg"  # ===== OPTIONAL ZUM ENTFERNEN ===== Nur wenn Warping.py nicht verwendet wird
 CAMERA_MATRIX_PATH = CALIBRATION_OUTPUT_DIR / "camera_matrix.npy"
 DIST_COEFFS_PATH = CALIBRATION_OUTPUT_DIR / "dist_coeffs.npy"
-HOMOGRAPHY_PATH = HOMOGRAPHY_OUTPUT_DIR / "H_charuco_topview.npy"
-RECTIFIED_TOP_VIEW_PATH = RECTIFIED_OUTPUT_DIR / "Rectified_top_view.jpg"
+HOMOGRAPHY_PATH = HOMOGRAPHY_OUTPUT_DIR / "H_charuco_topview.npy"  # ===== OPTIONAL ZUM ENTFERNEN ===== Nur wenn Warping.py nicht verwendet wird
+RECTIFIED_TOP_VIEW_PATH = RECTIFIED_OUTPUT_DIR / "Rectified_top_view.jpg"  # ===== OPTIONAL ZUM ENTFERNEN ===== Nur wenn Warping.py nicht verwendet wird
 
 
 # ChArUco-Checkerboard Definition 
