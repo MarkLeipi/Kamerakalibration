@@ -1,173 +1,92 @@
-"""1. Prüft, ob OpenCV und Charuco installiert und auch nutzbar sind."""
-"""2. Definiert neue Dataclass, um die Nutzung von cv2.aruco. ... versionsunabhängig zu machen"""
-from dataclasses import dataclass #Standardbibliothek. Ermöglicht vereinfachte Klassendeinitionen
-from typing import Any, Callable, Optional, Tuple #Standardbibliothek
+# Definition der globalen Parameter und Pfade, die in allen Modulen verwendet werden.
 
+
+from pathlib import Path #Standardbibliothek
 import cv2
 
 
-def _major_version(version_text: str) -> Optional[int]:
-    """Liest die installierte OpenCV Version."""
-    try:
-        return int(version_text.split(".")[0])
-    except (ValueError, AttributeError, IndexError):
-        return None
+# Definition der Pfade
+BASE_DIR = Path(__file__).resolve().parent
 
 
-def _create_detector_parameters():
-    """Erzeugt Detector-Parameter für alte und neue OpenCV-Versionen"""
-    if hasattr(cv2.aruco, "DetectorParameters"):
-        return cv2.aruco.DetectorParameters()
-    if hasattr(cv2.aruco, "DetectorParameters_create"):
-        return cv2.aruco.DetectorParameters_create()
-    raise RuntimeError(
-        "OpenCV kann keine ArUco-Detektorparameter erzeugen. "
-        "Bitte installiere opencv-contrib-python 4.x."
-    )
+# Eingabe von Kalibrier und Warping Bildern
+CAL_IMAGES_DIR = BASE_DIR / "saved_frames_Iphone"
+WARP_IMAGES_DIR = BASE_DIR / "Warp_Images"
 
 
-def _normalize_interpolate_result(raw_result) -> Tuple[int, Any, Any]:
-    """Normalisiert die Rueckgabe von interpolateCornersCharuco."""
-    if not isinstance(raw_result, tuple) or len(raw_result) < 3:
-        return 0, None, None
+# Ausgabedaten
+OUTPUTS_DIR = BASE_DIR / "outputs"
+CALIBRATION_OUTPUT_DIR = OUTPUTS_DIR / "calibration"
+CALIBRATION_DEBUG_OUTPUT_DIR = OUTPUTS_DIR / "calibration_debug"
+HOMOGRAPHY_OUTPUT_DIR = OUTPUTS_DIR / "homography"
+RECTIFIED_OUTPUT_DIR = OUTPUTS_DIR / "rectified"
 
-    retval, corners, ids = raw_result[:3]
-    count = 0 if retval is None else int(retval)
-    return count, corners, ids
+# OpenCV erwartet die Brettgroesse in der Reihenfolge (x, y):
+# x  Spalten
+# y  Zeilen
+BOARD_SQUARE_COUNT_X = 5
+BOARD_SQUARE_COUNT_Y = 7
 
+# Einzelne Dateien
+CHARUCO_BOARD_IMAGE_PATH = BASE_DIR / f"Charuco_{BOARD_SQUARE_COUNT_X}_{BOARD_SQUARE_COUNT_Y}.png"  
+DEFAULT_WARP_IMAGE_PATH = WARP_IMAGES_DIR / "5x7vid.jpg"  
+CAMERA_MATRIX_PATH = CALIBRATION_OUTPUT_DIR / "camera_matrix.npy"
+DIST_COEFFS_PATH = CALIBRATION_OUTPUT_DIR / "dist_coeffs.npy"
+HOMOGRAPHY_PATH = HOMOGRAPHY_OUTPUT_DIR / "H_charuco_topview.npy"  
+RECTIFIED_TOP_VIEW_PATH = RECTIFIED_OUTPUT_DIR / "Rectified_top_view.jpg"  
 
-def _normalize_detector_result(raw_result) -> Tuple[int, Any, Any]:
-    """Normalisiert die Rueckgabe von CharucoDetector.detectBoard."""
-    if not isinstance(raw_result, tuple) or len(raw_result) < 2:
-        return 0, None, None
+# ChArUco-Checkerboard Definition 
+ARUCO_DICT_NAME = "DICT_6X6_250"
 
-    corners, ids = raw_result[:2]
-    count = 0 if ids is None else len(ids)
-    return count, corners, ids
-
-
-@dataclass(frozen=True)
-class CharucoRuntime:
-    """Merkt sich einmalig, welche OpenCV-Version genutzt wird."""
-
-    version: str # Version als String
-    marker_backend_name: str 
-    charuco_backend_name: str
-    calibration_mode: str
-    _detect_markers_fn: Callable[[Any], Tuple[Any, Any, Any]]
-    _detect_charuco_fn: Callable[[Any, Any, Any], Tuple[int, Any, Any]]
-
-    @property
-    def description(self) -> str: # lesbare ausgabe über die OpenCV und Charuco-Version
-        return (
-            f"OpenCV {self.version} mit {self.marker_backend_name} "
-            f"und {self.charuco_backend_name}"
-        )
-
-    def detect_markers(self, image):
-        return self._detect_markers_fn(image)
-
-    def detect_charuco_corners(self, image, marker_corners, marker_ids):
-        if marker_ids is None or len(marker_ids) == 0:
-            return 0, None, None
-        return self._detect_charuco_fn(image, marker_corners, marker_ids)
-
-    def draw_charuco_corners(self, image, charuco_corners, charuco_ids):
-        if (
-            charuco_corners is not None
-            and charuco_ids is not None
-            and hasattr(cv2.aruco, "drawDetectedCornersCharuco")
-        ):
-            cv2.aruco.drawDetectedCornersCharuco(
-                image,
-                charuco_corners,
-                charuco_ids,
-                (0, 255, 0),
-            )
+# Reale Groesse eines Feldes bzw. eines ArUco-Markers in Metern.
+BOARD_SQUARE_LENGTH_M = 0.02
+BOARD_MARKER_LENGTH_M = 0.01
 
 
-def create_charuco_runtime(board, dictionary) -> CharucoRuntime:
-    """Waehlt genau einmal die passende OpenCV-Strategie fuer dieses Projekt."""
-    version = getattr(cv2, "__version__", "unbekannt")
-    major_version = _major_version(version)
+# Groesse des generierten Board-Bildes fuer den Ausdruck.
+BOARD_IMAGE_WIDTH_PX = 640
+BOARD_IMAGE_MARGIN_PX = 20
 
-    if major_version is not None and major_version < 4:
-        raise RuntimeError(
-            f"Gefundene OpenCV-Version: {version}. "
-            "Dieses Projekt benoetigt OpenCV 4.x mit dem aruco-Modul "
-            "(meist aus opencv-contrib-python)."
-        )
 
+# Einheitliche Vorschaubilder fuer Debug-Fenster.s
+PREVIEW_SIZE = (600, 800)
+SCALE_RECTIFIED = 2 # Vergrößerungsfaktor der Anzeige des rectified image
+SAVE_DEBUG = True
+NMB_DEBUG = 5 # Anzahl der gespeicherten Debug Bilder (+1, da 0er Index)
+
+def create_charuco_dictionary():
+    """Erzeugt das im ganzen Projekt verwendete ArUco-Woerterbuch."""
     if not hasattr(cv2, "aruco"):
         raise RuntimeError(
             "In dieser OpenCV-Installation fehlt das aruco-Modul. "
             "Bitte installiere opencv-contrib-python 4.x."
         )
 
-    if not hasattr(board, "matchImagePoints"):
+    if not hasattr(cv2.aruco, ARUCO_DICT_NAME):
         raise RuntimeError(
-            "Das geladene OpenCV unterstuetzt board.matchImagePoints nicht. "
-            "Diese Funktion wird fuer Kalibrierung und Warping benoetigt."
+            f"Das angeforderte ArUco-Woerterbuch '{ARUCO_DICT_NAME}' "
+            "wird von dieser OpenCV-Version nicht unterstuetzt."
         )
 
-    detector_parameters = _create_detector_parameters()
+    dictionary_id = getattr(cv2.aruco, ARUCO_DICT_NAME)
+    return cv2.aruco.getPredefinedDictionary(dictionary_id)
 
-    if hasattr(cv2.aruco, "ArucoDetector"):
-        marker_detector = cv2.aruco.ArucoDetector(dictionary, detector_parameters)
-        detect_markers_fn = marker_detector.detectMarkers
-        marker_backend_name = "ArucoDetector"
-    elif hasattr(cv2.aruco, "detectMarkers"):
-        def detect_markers_fn(image):
-            return cv2.aruco.detectMarkers(
-                image,
-                dictionary,
-                parameters=detector_parameters,
-            )
-
-        marker_backend_name = "detectMarkers"
-    else:
-        raise RuntimeError(
-            "In dieser OpenCV-Installation fehlt eine nutzbare ArUco-Markererkennung."
-        )
-
-    if hasattr(cv2.aruco, "interpolateCornersCharuco"):
-        def detect_charuco_fn(image, marker_corners, marker_ids):
-            return _normalize_interpolate_result(
-                cv2.aruco.interpolateCornersCharuco(
-                    marker_corners,
-                    marker_ids,
-                    image,
-                    board,
-                )
-            )
-
-        charuco_backend_name = "interpolateCornersCharuco"
-    elif hasattr(cv2.aruco, "CharucoDetector"):
-        charuco_detector = cv2.aruco.CharucoDetector(board)
-
-        def detect_charuco_fn(image, marker_corners, marker_ids):
-            _ = marker_corners, marker_ids
-            return _normalize_detector_result(charuco_detector.detectBoard(image))
-
-        charuco_backend_name = "CharucoDetector"
-    else:
-        raise RuntimeError(
-            "Es wurde keine passende ChArUco-Erkennung gefunden. "
-            "Unterstuetzt werden OpenCV-Installationen mit "
-            "interpolateCornersCharuco oder CharucoDetector."
-        )
-
-    calibration_mode = (
-        "charuco"
-        if hasattr(cv2.aruco, "calibrateCameraCharuco")
-        else "standard"
+def create_charuco_board():
+    """Erzeugt das ChArUco-Board mit genau den Projektparametern."""
+    return cv2.aruco.CharucoBoard(
+        (BOARD_SQUARE_COUNT_X, BOARD_SQUARE_COUNT_Y),
+        BOARD_SQUARE_LENGTH_M,
+        BOARD_MARKER_LENGTH_M,
+        create_charuco_dictionary(),
     )
 
-    return CharucoRuntime(
-        version=version,
-        marker_backend_name=marker_backend_name,
-        charuco_backend_name=charuco_backend_name,
-        calibration_mode=calibration_mode,
-        _detect_markers_fn=detect_markers_fn,
-        _detect_charuco_fn=detect_charuco_fn,
-    )
+def ensure_output_directories():
+    """Legt die benoetigten Ausgabeordner an, falls sie noch fehlen."""
+    for directory in (
+        OUTPUTS_DIR,
+        CALIBRATION_OUTPUT_DIR,
+        CALIBRATION_DEBUG_OUTPUT_DIR,
+        HOMOGRAPHY_OUTPUT_DIR,
+        RECTIFIED_OUTPUT_DIR,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
