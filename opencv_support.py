@@ -1,13 +1,13 @@
-"""Zentrale OpenCV-/ChArUco-Kompatibilitaet fuer dieses Projekt."""
-
-from dataclasses import dataclass
-from typing import Any, Callable, Optional, Tuple
+"""1. Prüft, ob OpenCV und Charuco installiert und auch nutzbar sind."""
+"""2. Definiert neue Dataclass, um die Nutzung von cv2.aruco. ... versionsunabhängig zu machen"""
+from dataclasses import dataclass #Standardbibliothek. Ermöglicht vereinfachte Klassendeinitionen
+from typing import Any, Callable, Optional, Tuple #Standardbibliothek
 
 import cv2
 
 
 def _major_version(version_text: str) -> Optional[int]:
-    """Liest die Hauptversion aus einem OpenCV-Versionsstring."""
+    """Liest die installierte OpenCV Version."""
     try:
         return int(version_text.split(".")[0])
     except (ValueError, AttributeError, IndexError):
@@ -15,7 +15,7 @@ def _major_version(version_text: str) -> Optional[int]:
 
 
 def _create_detector_parameters():
-    """Erzeugt Detector-Parameter fuer alte und neue OpenCV-APIs."""
+    """Erzeugt Detector-Parameter für alte und neue OpenCV-Versionen"""
     if hasattr(cv2.aruco, "DetectorParameters"):
         return cv2.aruco.DetectorParameters()
     if hasattr(cv2.aruco, "DetectorParameters_create"):
@@ -48,17 +48,17 @@ def _normalize_detector_result(raw_result) -> Tuple[int, Any, Any]:
 
 @dataclass(frozen=True)
 class CharucoRuntime:
-    """Merkt sich einmalig, welche OpenCV-API im Projekt genutzt wird."""
+    """Merkt sich einmalig, welche OpenCV-Version genutzt wird."""
 
-    version: str
-    marker_backend_name: str
+    version: str # Version als String
+    marker_backend_name: str 
     charuco_backend_name: str
     calibration_mode: str
     _detect_markers_fn: Callable[[Any], Tuple[Any, Any, Any]]
     _detect_charuco_fn: Callable[[Any, Any, Any], Tuple[int, Any, Any]]
 
     @property
-    def description(self) -> str:
+    def description(self) -> str: # lesbare ausgabe über die OpenCV und Charuco-Version
         return (
             f"OpenCV {self.version} mit {self.marker_backend_name} "
             f"und {self.charuco_backend_name}"
