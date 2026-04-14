@@ -1,0 +1,44 @@
+"""Entzerrung und Top-View-Warping mit klarer Schritt-fuer-Schritt-Struktur."""
+
+#%%
+
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from opencv_support import create_charuco_runtime
+from set_params import (
+    CAMERA_MATRIX_PATH,
+    DEFAULT_WARP_IMAGE_PATH,
+    DIST_COEFFS_PATH,
+    HOMOGRAPHY_PATH,
+    PREVIEW_SIZE,
+    SCALE_RECTIFIED,
+    RECTIFIED_TOP_VIEW_PATH,
+    create_charuco_board,
+    create_charuco_dictionary,
+    ensure_output_directories,
+)
+
+#%%
+image = cv2.imread(str(DEFAULT_WARP_IMAGE_PATH))
+board = create_charuco_board()
+dictionary = create_charuco_dictionary()
+runtime = create_charuco_runtime(board, dictionary)
+
+matrix = np.load(CAMERA_MATRIX_PATH)
+dist_coeff = np.load(DIST_COEFFS_PATH)
+
+undistorted = cv2.undistort(image, matrix, dist_coeff)
+
+marker_corners, marker_ids, _ = runtime.detect_markers(undistorted)
+
+charuco_count, charuco_corners, charuco_ids = runtime.detect_charuco_corners(
+    undistorted,
+    marker_corners,
+    marker_ids
+)
+
+
+#%%
