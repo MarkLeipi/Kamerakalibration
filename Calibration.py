@@ -1,6 +1,4 @@
 """
-Vereinfachte Kamerakalibrierung mit ChArUco-Board.
-
 Funktionalität:
 1. Kalibrierung durchführen
 2. RMS-Fehler pro Bild ausgeben
@@ -15,9 +13,11 @@ import numpy as np
 from opencv_support import create_charuco_runtime
 from set_params import (
     CAL_IMAGES_DIR,
-    CALIBRATION_DEBUG_OUTPUT_DIR,  # ===== ZUM ENTFERNEN ===== Nur wenn save_debug=False dauerhaft gesetzt wird (Zeile 88)
+    CALIBRATION_DEBUG_OUTPUT_DIR,  
     CAMERA_MATRIX_PATH,
     DIST_COEFFS_PATH,
+    SAVE_DEBUG,
+    NMB_DEBUG,
     create_charuco_board,
     create_charuco_dictionary,
     ensure_output_directories,
@@ -53,6 +53,8 @@ def detect_corners_in_image(image, board, runtime, image_path, save_debug, debug
         image, marker_corners, marker_ids
     )
     
+    breakpoint() 
+    
     # Mindestens 4 Ecken nötig
     if charuco_count < 4 or charuco_corners is None or charuco_ids is None:
         return None, None, False
@@ -64,8 +66,8 @@ def detect_corners_in_image(image, board, runtime, image_path, save_debug, debug
         return None, None, False
     
     # ===== ZUM ENTFERNEN ===== Dieser ganze if-Block kann gelöscht werden, wenn save_debug nicht mehr nötig ist
-    # Optional: Debug-Bild speichern (nur erste 3 Bilder)
-    if save_debug and debug_counter <= 3:
+    # Optional: Debug-Bild speichern (nur erste 4 Bilder)
+    if save_debug and debug_counter <= NMB_DEBUG:
         debug_image = image.copy()
         cv2.aruco.drawDetectedMarkers(debug_image, marker_corners, marker_ids)
         runtime.draw_charuco_corners(debug_image, charuco_corners, charuco_ids)
@@ -86,11 +88,11 @@ def calibrate():
     dictionary = create_charuco_dictionary()
     runtime = create_charuco_runtime(board, dictionary)
     image_paths = load_all_images()
+    debug_images_for_undistort = []
+    all_images = []
     
-    # ===== ZUM ENTFERNEN ===== Diese Variable kann gelöscht werden, wenn Debug-Bilder nicht mehr nötig sind
-    # In diesem Fall auch entfernen: if save_debug: ensure_output_directories() (Zeile 98)
-    # und if save_debug: print(...) (Zeilen 152-153)
-    save_debug = True  # ===== HIER ÄNDERN: True = Debug-Bilder speichern, False = nicht speichern
+
+    save_debug = SAVE_DEBUG  # ===== HIER ÄNDERN: True = Debug-Bilder speichern, False = nicht speichern
     # =======================
     
     print(f"Verwende: {runtime.description}")
@@ -123,8 +125,17 @@ def calibrate():
         if success:
             all_object_points.append(obj_pts)
             all_image_points.append(img_pts)
+
+            all_object_points.append(obj_pts)
+            all_image_points.append(img_pts)
+            all_images.append(image)
+
             usable_count += 1
-            debug_counter += 1  # ===== Counter nur für erfolgreiche Bilder erhöhen
+
+            if save_debug and len(debug_images_for_undistort) < NMB_DEBUG:
+                debug_images_for_undistort.append(image.copy())
+
+            debug_counter += 1
             print(f"✓ {image_path.name}: {len(obj_pts)} Punkte erkannt")
         else:
             print(f"✗ {image_path.name}: Zu wenig Punkte oder keine Marker erkannt")
@@ -152,15 +163,27 @@ def calibrate():
     
     # RMS pro Bild ausgeben
     print("RMS-Fehler pro Bild:")
-    for i, (obj_pts, img_pts) in enumerate(zip(all_object_points, all_image_points)):
-        projected, _ = cv2.projectPoints(obj_pts, rvecs[i], tvecs[i], 
-                                         camera_matrix, dist_coeffs)
+
+    for i, (obj_pts, img_pts, img) in enumerate(
+            zip(all_object_points, all_image_points, all_images)
+        ):
+
+        # Reprojektion
+        projected, _ = cv2.projectPoints(
+            obj_pts, rvecs[i], tvecs[i],
+            camera_matrix, dist_coeffs
+        )
+
         error = cv2.norm(img_pts, projected, cv2.NORM_L2)
         rms = np.sqrt((error ** 2) / len(projected))
+
         print(f"  Bild {i+1}: {rms:.6f}")
-    
-    # Gesamt-RMS
-    print(f"\nGesamt-RMS: {retval:.6f}")
+
+        # Optional: Undistorted Debug-Bild speichern
+        if save_debug and i < NMB_DEBUG:
+            undistorted = cv2.undistort(img, camera_matrix, dist_coeffs)
+            out_file = CALIBRATION_DEBUG_OUTPUT_DIR / f"Bild{i+1}_undistorted.jpg"
+            cv2.imwrite(str(out_file), undistorted)
     
     # Ergebnisse speichern
     ensure_output_directories()
@@ -168,7 +191,7 @@ def calibrate():
     np.save(str(DIST_COEFFS_PATH), dist_coeffs)
     print(f"\nErgebnisse gespeichert in: {CALIBRATION_DEBUG_OUTPUT_DIR}")
     
-    # ===== ZUM ENTFERNEN ===== Diese if-Bedingung kann gelöscht werden, wenn save_debug nicht mehr nötig ist
+
     if save_debug:
         print(f"Debug-Bilder unter: {CALIBRATION_DEBUG_OUTPUT_DIR}")
     # =======================
