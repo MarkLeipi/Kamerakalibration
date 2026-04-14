@@ -23,179 +23,81 @@ from set_params import (
     ensure_output_directories,
 )
 
-
-def load_all_images():
-    """Laden aller Kalibierbilder."""
-    if not CAL_IMAGES_DIR.exists():
-        raise FileNotFoundError(f"Ordner nicht gefunden: {CAL_IMAGES_DIR}")
-    
-    supported = {".jpg", ".jpeg", ".png"}
-    images = sorted(
-        path for path in CAL_IMAGES_DIR.iterdir()
-        if path.is_file() and path.suffix.lower() in supported
-    )
-    return images
-
-
-def detect_corners_in_image(image, board, runtime, image_path, save_debug, debug_counter):
-    """
-    Erkennt ChArUco-Ecken in einem Bild.
-    
-    Rückgabe: (object_points, image_points, erfolgreich) oder (None, None, False)
-    """
-    # Marker erkennen
-    marker_corners, marker_ids, _ = runtime.detect_markers(image)
-    if marker_ids is None or len(marker_ids) == 0:
-        return None, None, False
-    
-    # ChArUco-Ecken aus Markern extrahieren
-    charuco_count, charuco_corners, charuco_ids = runtime.detect_charuco_corners(
-        image, marker_corners, marker_ids
-    )
-    
-    breakpoint() 
-    
-    # Mindestens 4 Ecken nötig
-    if charuco_count < 4 or charuco_corners is None or charuco_ids is None:
-        return None, None, False
-    
-    # Bild-Punkte mit 3D Board-Punkte verbinden
-    object_points, image_points = board.matchImagePoints(charuco_corners, charuco_ids)
-    
-    if object_points is None or image_points is None or len(object_points) < 4:
-        return None, None, False
-    
-    # ===== ZUM ENTFERNEN ===== Dieser ganze if-Block kann gelöscht werden, wenn save_debug nicht mehr nötig ist
-    # Optional: Debug-Bild speichern (nur erste 4 Bilder)
-    if save_debug and debug_counter <= NMB_DEBUG:
-        debug_image = image.copy()
-        cv2.aruco.drawDetectedMarkers(debug_image, marker_corners, marker_ids)
-        runtime.draw_charuco_corners(debug_image, charuco_corners, charuco_ids)
-        cv2.putText(debug_image, f"{len(object_points)} Punkte", (20, 40),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
-        debug_file = CALIBRATION_DEBUG_OUTPUT_DIR / f"Bild{debug_counter}.jpg"
-        cv2.imwrite(str(debug_file), debug_image)
-    # =======================
-    
-    return object_points, image_points, True
-
-
 def calibrate():
-    """Führt Kalibrierung durch."""
-    # Setup
+    """Führt Kalibrierung durch mit Fokus auf RMS-Ausgabe und Debugging."""
     board = create_charuco_board()
-    dictionary = create_charuco_dictionary()
-    runtime = create_charuco_runtime(board, dictionary)
-    image_paths = load_all_images()
-    debug_images_for_undistort = []
-    all_images = []
+    runtime = create_charuco_runtime(board, create_charuco_dictionary())
+    ensure_output_directories()
     
-
-    save_debug = SAVE_DEBUG  # ===== HIER ÄNDERN: True = Debug-Bilder speichern, False = nicht speichern
-    # =======================
+    # Bilder laden
+    image_paths = sorted([p for p in CAL_IMAGES_DIR.glob("*") if p.suffix.lower() in {".jpg", ".jpeg", ".png"}])
+    print(f"Verwende: {runtime.description}\nBilder gefunden: {len(image_paths)}\n")
     
-    print(f"Verwende: {runtime.description}")
-    print(f"Bilder gefunden: {len(image_paths)}\n")
-    
-    if save_debug:
-        ensure_output_directories()
-    # =======================
-    
-    # Alle brauchbaren Punkte sammeln
     all_object_points = []
     all_image_points = []
+    all_images = []
     image_size = None
-    usable_count = 0
-    debug_counter = 0  # ===== Zähler für Debug-Bilder (nur erste 3)
-    
-    for image_path in image_paths:
-        image = cv2.imread(str(image_path))
-        if image is None:
-            print(f"✗ {image_path.name}: Bild konnte nicht geladen werden")
-            continue
-        
-        if image_size is None:
-            image_size = (image.shape[1], image.shape[0])
-        
-        obj_pts, img_pts, success = detect_corners_in_image(
-            image, board, runtime, image_path, save_debug, debug_counter
-        )
-        
-        if success:
-            all_object_points.append(obj_pts)
-            all_image_points.append(img_pts)
 
-            all_object_points.append(obj_pts)
-            all_image_points.append(img_pts)
-            all_images.append(image)
+    # 1. Detektion & Punkt-Matching
+    for path in image_paths:
+        image = cv2.imread(str(path))
+        if image is None: continue
+        if image_size is None: image_size = (image.shape[1], image.shape[0])
 
-            usable_count += 1
+        # Marker und ChArUco-Ecken erkennen (wie im alten Code)
+        marker_corners, marker_ids, _ = runtime.detect_markers(image)
+        charuco_count, charuco_corners, charuco_ids = runtime.detect_charuco_corners(image, marker_corners, marker_ids)
 
-            if save_debug and len(debug_images_for_undistort) < NMB_DEBUG:
-                debug_images_for_undistort.append(image.copy())
-
-            debug_counter += 1
-            print(f"✓ {image_path.name}: {len(obj_pts)} Punkte erkannt")
+        if charuco_count >= 4:
+            # Verbindung zu 3D-Board-Punkten (matchImagePoints wie gewünscht)
+            obj_pts, img_pts = board.matchImagePoints(charuco_corners, charuco_ids)
+            
+            if obj_pts is not None and img_pts is not None:
+                all_object_points.append(obj_pts)
+                all_image_points.append(img_pts)
+                all_images.append(image)
+                print(f"✓ {path.name}: {len(obj_pts)} Punkte erkannt")
+                
+                # Debug-Bild (Erkennung)
+                if SAVE_DEBUG and len(all_images) <= NMB_DEBUG:
+                    debug_img = image.copy()
+                    cv2.aruco.drawDetectedMarkers(debug_img, marker_corners, marker_ids)
+                    runtime.draw_charuco_corners(debug_img, charuco_corners, charuco_ids)
+                    cv2.imwrite(str(CALIBRATION_DEBUG_OUTPUT_DIR / f"Bild{len(all_images)}.jpg"), debug_img)
         else:
-            print(f"✗ {image_path.name}: Zu wenig Punkte oder keine Marker erkannt")
-    
-    if usable_count < 10:
-        raise RuntimeError(f"Nur {usable_count} brauchbare Bilder - brauche mindestens 10!")
-    
-    print(f"\n{usable_count}/{len(image_paths)} Bilder verwendbar\n")
-    
-    # Kalibrierung
-    if runtime.calibration_mode == "charuco":
-        all_charuco_corners = []
-        all_charuco_ids = []
-        for obj_pts, img_pts in zip(all_object_points, all_image_points):
-            all_charuco_corners.append(obj_pts)
-            all_charuco_ids.append(img_pts)
-        
-        retval, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.aruco.calibrateCameraCharuco(
-            all_charuco_corners, all_charuco_ids, board, image_size, None, None
-        )
-    else:
-        retval, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
-            all_object_points, all_image_points, image_size, None, None
-        )
-    
-    # RMS pro Bild ausgeben
+            print(f"✗ {path.name}: Zu wenig Punkte")
+
+    if len(all_object_points) < 10:
+        raise RuntimeError(f"Nur {len(all_object_points)} Bilder brauchbar - brauche 10!")
+
+    # 2. Kalibrierung
+    # Wir nutzen hier cv2.calibrateCamera, da wir die Punkte bereits via matchImagePoints 
+    # in das passende Format (Objekt- vs Bildpunkte) gebracht haben.
+    retval, camera_matrix, dist_coeffs, rvecs, tvecs = cv2.calibrateCamera(
+        all_object_points, all_image_points, image_size, None, None
+    )
+
+    # 3. Ausgaben (Logs & RMS)
+    print(f"\n{len(all_object_points)}/{len(image_paths)} Bilder verwendbar")
+    print(f"Gesamt-RMS: {retval:.6f}\n")
     print("RMS-Fehler pro Bild:")
 
-    for i, (obj_pts, img_pts, img) in enumerate(
-            zip(all_object_points, all_image_points, all_images)
-        ):
-
+    for i, (obj_pts, img_pts, img) in enumerate(zip(all_object_points, all_image_points, all_images)):
         # Reprojektion
-        projected, _ = cv2.projectPoints(
-            obj_pts, rvecs[i], tvecs[i],
-            camera_matrix, dist_coeffs
-        )
-
+        projected, _ = cv2.projectPoints(obj_pts, rvecs[i], tvecs[i], camera_matrix, dist_coeffs)
         error = cv2.norm(img_pts, projected, cv2.NORM_L2)
         rms = np.sqrt((error ** 2) / len(projected))
-
         print(f"  Bild {i+1}: {rms:.6f}")
 
         # Optional: Undistorted Debug-Bild speichern
-        if save_debug and i < NMB_DEBUG:
+        if SAVE_DEBUG and i < NMB_DEBUG:
             undistorted = cv2.undistort(img, camera_matrix, dist_coeffs)
-            out_file = CALIBRATION_DEBUG_OUTPUT_DIR / f"Bild{i+1}_undistorted.jpg"
-            cv2.imwrite(str(out_file), undistorted)
-    
-    # Ergebnisse speichern
-    ensure_output_directories()
+            cv2.imwrite(str(CALIBRATION_DEBUG_OUTPUT_DIR / f"Bild{i+1}_undistorted.jpg"), undistorted)
+
+    # 4. Ergebnisse speichern
     np.save(str(CAMERA_MATRIX_PATH), camera_matrix)
     np.save(str(DIST_COEFFS_PATH), dist_coeffs)
     print(f"\nErgebnisse gespeichert in: {CALIBRATION_DEBUG_OUTPUT_DIR}")
-    
-
-    if save_debug:
-        print(f"Debug-Bilder unter: {CALIBRATION_DEBUG_OUTPUT_DIR}")
-    # =======================
-
 
 if __name__ == "__main__":
     try:
