@@ -1,0 +1,223 @@
+import cv2
+import numpy as np
+import os
+import glob
+import matplotlib.pyplot as plt
+from matplotlib.widgets import LassoSelector
+from matplotlib.path import Path
+from circle_fit import hyperLSQ
+
+INPUT_DIR = "input_images"
+
+# Globale Variable für den aktuellen Lasso-Pfad
+current_lasso_path = None
+
+def on_select(vertices):
+    """ Wird aufgerufen, sobald eine Lasso-Form geschlossen wird """
+    global current_lasso_path
+    current_lasso_path = Path(vertices)
+    plt.close()
+
+def get_lasso_selection(display_image, window_title):
+    """ Öffnet das Lasso-Fenster auf dem übergebenen Bild (z.B. Canny) """
+    global current_lasso_path
+    current_lasso_path = None
+    
+    fig, ax = plt.subplots()
+    if len(display_image.shape) == 2:
+        ax.imshow(display_image, cmap='gray')
+    else:
+        ax.imshow(cv2.cvtColor(display_image, cv2.COLOR_BGR2RGB))
+        
+    plt.title(window_title)
+    selector = LassoSelector(ax, on_select, props=dict(color='green', linewidth=2))
+    plt.show()
+    
+    return current_lasso_path
+
+def process_single_image(img, roi_rect, roi_offset, path1, path2):
+    """
+    Verarbeitet ein einzelnes Bild mit den vordefinierten ROIs und Lassos.
+    Gibt das fertige Ergebnis-Bild sowie die Radien r1, r2 zurück.
+    """
+    # 1. Bild zuschneiden anhand der gemerkten Rechteck-ROI
+    x, y, w, h = roi_rect
+    roi = img[y:y+h, x:x+w] if roi_rect != (0, 0, 0, 0) else img
+
+    # 2. Kanten berechnen
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 1.5)
+    edges = cv2.Canny(blurred, 50, 150)
+
+    edge_coords = cv2.findNonZero(edges)
+    if edge_coords is None:
+        return None, None, None # Keine Kanten gefunden
+    edge_points = np.squeeze(edge_coords)
+
+    # 3. Kreis 1 berechnen
+    inside_mask1 = path1.contains_points(edge_points)
+    filtered_points1 = edge_points[inside_mask1]
+    
+    # 4. Kreis 2 berechnen
+    inside_mask2 = path2.contains_points(edge_points)
+    filtered_points2 = edge_points[inside_mask2]
+
+    # Falls eines der Lassos im aktuellen Bild keine Kanten trifft, Überspringen abfangen
+    if len(filtered_points1) < 3 or len(filtered_points2) < 3:
+        return None, None, None
+
+    # Fits durchführen
+    xc_roi1, yc_roi1, r1, sigma1 = hyperLSQ(filtered_points1)
+    xc_abs1 = xc_roi1 + roi_offset[0]
+    yc_abs1 = yc_roi1 + roi_offset[1]
+
+    xc_roi2, yc_roi2, r2, sigma2 = hyperLSQ(filtered_points2)
+    xc_abs2 = xc_roi2 + roi_offset[0]
+    yc_abs2 = yc_roi2 + roi_offset[1]
+
+    # 5. Visualisierung auf dem aktuellen Originalbild zeichnen
+    result_img = img.copy()
+    cv2.circle(result_img, (int(xc_abs1), int(yc_abs1)), int(r1), (255, 255, 0), 2, lineType=cv2.LINE_AA)
+    cv2.circle(result_img, (int(xc_abs1), int(yc_abs1)), 4, (0, 0, 255), -1)
+    cv2.circle(result_img, (int(xc_abs2), int(yc_abs2)), int(r2), (255, 0, 255), 2, lineType=cv2.LINE_AA)
+    cv2.circle(result_img, (int(xc_abs2), int(yc_abs2)), 4, (0, 0, 255), -1)
+
+    cv2.putText(result_img, f"Kreis 1 R: {r1:.2f}px", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+    cv2.putText(result_img, f"Kreis 2 R: {r2:.2f}px", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+    
+    return result_img, r1, r2
+
+
+# ===== HAUPTPROGRAMM =====
+print("\n" + "="*60)
+print("BATCH-KREISFIT: VARIABLE AUSGABE & STATISTIK")
+print("="*60)
+
+# Ordner automatisch erstellen, falls er nicht existiert
+os.makedirs(INPUT_DIR, exist_ok=True)
+
+# Alle Bilder im Ordner suchen
+image_extensions = ('*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG')
+image_files = []
+for ext in image_extensions:
+    image_files.extend(glob.glob(os.path.join(INPUT_DIR, ext)))
+
+image_files.sort()
+
+if not image_files:
+    print(f"Keine Bilder im Ordner '{INPUT_DIR}' gefunden!")
+    print(f"Bitte lege deine Bilder in den Ordner: {os.path.abspath(INPUT_DIR)}")
+    exit(1)
+
+print(f"✓ {len(image_files)} Bilder für die Verarbeitung gefunden.")
+
+# --- SCHRITT 0: LOG-EINGABE FÜR DEN AUSGABEORDNER ---
+print("\n" + "-"*40)
+output_dir_input = input("Gib den gewünschten Namen für den Ausgabe-Ordner ein: ").strip()
+
+# Falls der User einfach ENTER drückt, Standardnamen vergeben
+if not output_dir_input:
+    output_dir_input = "output_results_standard"
+
+OUTPUT_DIR = output_dir_input
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+print(f"✓ Ergebnisse werden gespeichert in: {os.path.abspath(OUTPUT_DIR)}")
+print("-"*40)
+
+# Lists zum Sammeln der Radien für die Statistik
+radii_kreis1 = []
+radii_kreis2 = []
+
+# ----------------------------------------------------------------
+# PHASE 1: EINMALIGE KALIBRIERUNG AN BILD 1
+# ----------------------------------------------------------------
+print(f"\n--> Starte Kalibrierung mit dem ersten Bild: {os.path.basename(image_files[0])}")
+first_img = cv2.imread(image_files[0])
+
+print("--> Bitte den groben Bereich (Rechteck) auswählen...")
+roi_rect = cv2.selectROI("1. Grobe Rechteck-Auswahl für alle Bilder (ENTER)", first_img, fromCenter=False)
+cv2.destroyWindow("1. Grobe Rechteck-Auswahl für alle Bilder (ENTER)")
+
+x, y, w, h = roi_rect
+roi_offset = (x, y) if roi_rect != (0, 0, 0, 0) else (0, 0)
+roi_first = first_img[y:y+h, x:x+w] if roi_rect != (0, 0, 0, 0) else first_img
+
+# Einmalig Canny für die Lasso-Auswahl auf Bild 1 berechnen
+gray_first = cv2.cvtColor(roi_first, cv2.COLOR_BGR2GRAY)
+blurred_first = cv2.GaussianBlur(gray_first, (5, 5), 1.5)
+edges_first = cv2.Canny(blurred_first, 50, 150)
+
+print("\n--> Starte Auswahl für KREIS 1 (auf Canny-Bild)...")
+path1 = get_lasso_selection(edges_first, "KALIBRIERUNG KREIS 1: Lasso ziehen")
+
+print("\n--> Starte Auswahl für KREIS 2 (auf Canny-Bild)...")
+path2 = get_lasso_selection(edges_first, "KALIBRIERUNG KREIS 2: Lasso ziehen")
+
+if path1 is None or path2 is None:
+    print("Kalibrierung abgebrochen.")
+    exit(0)
+
+print("\n" + "="*50)
+print("✓ KALIBRIERUNG ABGESCHLOSSEN. Starte automatische Verarbeitung...")
+print("="*50)
+
+# ----------------------------------------------------------------
+# PHASE 2: AUTOMATISCHE SCHLEIFE ÜBER ALLE BILDER
+# ----------------------------------------------------------------
+for idx, file_path in enumerate(image_files):
+    filename = os.path.basename(file_path)
+    print(f"Verarbeite [{idx+1}/{len(image_files)}]: {filename} ... ", end="")
+    
+    current_img = cv2.imread(file_path)
+    if current_img is None:
+        print("FEHLER (Konnte Bild nicht laden)")
+        continue
+        
+    # Rufe Verarbeitungsfunktion auf
+    res_data = process_single_image(current_img, roi_rect, roi_offset, path1, path2)
+    
+    if res_data is not None:
+        res_img, r1, r2 = res_data
+        
+        # Radien für die statistische Auswertung speichern
+        radii_kreis1.append(r1)
+        radii_kreis2.append(r2)
+        
+        # Bild im benutzerdefinierten Output-Ordner speichern
+        output_path = os.path.join(OUTPUT_DIR, f"result_{filename}")
+        cv2.imwrite(output_path, res_img)
+        print(f"ERFOLGREICH (R1: {r1:.2f}px | R2: {r2:.2f}px)")
+    else:
+        print("FEHLER (Zu wenige Kantenpunkte im Lasso-Bereich)")
+
+# ----------------------------------------------------------------
+# PHASE 3: STATISTISCHE AUSWERTUNG UND AUSGABE
+# ----------------------------------------------------------------
+print("\n" + "="*60)
+print("MESSSTATISTIK DER ZYKLISCHEN BEWEGUNG")
+print("="*60)
+
+if radii_kreis1 and radii_kreis2:
+    # Berechnungen für Kreis 1
+    mean_r1 = np.mean(radii_kreis1)
+    std_r1 = np.std(radii_kreis1)
+    
+    # Berechnungen für Kreis 2
+    mean_r2 = np.mean(radii_kreis2)
+    std_r2 = np.std(radii_kreis2)
+    
+    print(f"Ausgewertete Bilder: {len(radii_kreis1)} von {len(image_files)}")
+    print("-" * 40)
+    print(f"KREIS 1 (Cyan):")
+    print(f"  - Mittelwert (Mean):       {mean_r1:.4f} Pixel")
+    print(f"  - Standardabweichung (Std): {std_r1:.4f} Pixel")
+    print("-" * 40)
+    print(f"KREIS 2 (Magenta):")
+    print(f"  - Mittelwert (Mean):       {mean_r2:.4f} Pixel")
+    print(f"  - Standardabweichung (Std): {std_r2:.4f} Pixel")
+else:
+    print("⚠ Es konnten keine statistischen Daten berechnet werden, da alle Bilder fehlschlugen.")
+
+print("="*60)
+print(f"FERTIG! Bilder gespeichert unter: {os.path.abspath(OUTPUT_DIR)}")
+print("="*60 + "\n")
