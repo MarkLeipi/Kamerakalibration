@@ -1,0 +1,124 @@
+import cv2
+import numpy as np
+import os
+import matplotlib.pyplot as plt
+from matplotlib.widgets import LassoSelector
+from matplotlib.path import Path
+from circle_fit import hyperLSQ
+
+# Globale Variable für den aktuellen Lasso-Pfad
+current_lasso_path = None
+
+def on_select(vertices):
+    """ Wird aufgerufen, sobald eine Lasso-Form geschlossen wird """
+    global current_lasso_path
+    current_lasso_path = Path(vertices)
+    plt.close()
+
+def get_lasso_selection(display_image, window_title):
+    """ Öffnet das Lasso-Fenster auf dem übergebenen Bild (z.B. Canny) """
+    global current_lasso_path
+    current_lasso_path = None
+    
+    fig, ax = plt.subplots()
+    
+    if len(display_image.shape) == 2:
+        ax.imshow(display_image, cmap='gray')
+    else:
+        ax.imshow(cv2.cvtColor(display_image, cv2.COLOR_BGR2RGB))
+        
+    plt.title(window_title)
+    
+    selector = LassoSelector(ax, on_select, props=dict(color='green', linewidth=2))
+    plt.show()
+    
+    return current_lasso_path
+
+# ===== HAUPTPROGRAMM =====
+image_path = "image4.jpg"
+img = cv2.imread(image_path)
+if img is None:
+    print("Fehler beim Laden des Bildes.")
+    exit(1)
+
+# ===== SCHRITT 1: RECHTECK-ROI =====
+print("\n--> Bitte den groben Bereich (Rechteck) auswählen...")
+roi_rect = cv2.selectROI("1. Grobe Rechteck-Auswahl für beide Kreise (ENTER)", img, fromCenter=False)
+cv2.destroyWindow("1. Grobe Rechteck-Auswahl für beide Kreise (ENTER)")
+
+x, y, w, h = roi_rect
+if roi_rect != (0, 0, 0, 0):
+    roi = img[y:y+h, x:x+w]
+    roi_offset = (x, y)
+else:
+    roi = img
+    roi_offset = (0, 0)
+
+# ===== SCHRITT 2: KANTEN BERECHNEN =====
+gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+blurred = cv2.GaussianBlur(gray, (5, 5), 1.5)
+edges = cv2.Canny(blurred, 50, 150)
+
+edge_coords = cv2.findNonZero(edges)
+if edge_coords is None:
+    print("Keine Kanten im ROI-Bereich gefunden.")
+    exit(1)
+edge_points = np.squeeze(edge_coords)
+
+# ===== SCHRITT 3: ERSTES LASSO (CANNY) =====
+print("\n--> Starte Auswahl für KREIS 1 (auf Canny-Bild)...")
+path1 = get_lasso_selection(edges, "KREIS 1: Lasso um die WEISSEN Kanten ziehen")
+if path1 is None:
+    print("Abbruch.")
+    exit(0)
+
+inside_mask1 = path1.contains_points(edge_points)
+filtered_points1 = edge_points[inside_mask1]
+xc_roi1, yc_roi1, r1, sigma1 = hyperLSQ(filtered_points1)
+xc_abs1 = xc_roi1 + roi_offset[0]
+yc_abs1 = yc_roi1 + roi_offset[1]
+
+# ===== SCHRITT 4: ZWEITES LASSO (CANNY) =====
+print("\n--> Starte Auswahl für KREIS 2 (auf Canny-Bild)...")
+path2 = get_lasso_selection(edges, "KREIS 2: Lasso um die WEISSEN Kanten ziehen")
+if path2 is None:
+    print("Abbruch.")
+    exit(0)
+
+inside_mask2 = path2.contains_points(edge_points)
+filtered_points2 = edge_points[inside_mask2]
+xc_roi2, yc_roi2, r2, sigma2 = hyperLSQ(filtered_points2)
+xc_abs2 = xc_roi2 + roi_offset[0]
+yc_abs2 = yc_roi2 + roi_offset[1]
+
+# ===== SCHRITT 5: ERGEBNIS-IMAGE GENERIEREN =====
+result_img = img.copy()
+cv2.circle(result_img, (int(xc_abs1), int(yc_abs1)), int(r1), (255, 255, 0), 2, lineType=cv2.LINE_AA)
+cv2.circle(result_img, (int(xc_abs1), int(yc_abs1)), 4, (0, 0, 255), -1)
+cv2.circle(result_img, (int(xc_abs2), int(yc_abs2)), int(r2), (255, 0, 255), 2, lineType=cv2.LINE_AA)
+cv2.circle(result_img, (int(xc_abs2), int(yc_abs2)), 4, (0, 0, 255), -1)
+
+cv2.putText(result_img, f"Kreis 1 R: {r1:.2f}px", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+cv2.putText(result_img, f"Kreis 2 R: {r2:.2f}px", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, lineType=cv2.LINE_AA)
+
+# ===== SCHRITT 6: DIREKTE TERMINAL-EINGABE FÜR DATEINAMEN =====
+print("\n" + "="*50)
+filename_input = input("Gib den gewünschten Dateinamen ein (z.B. messung_01): ").strip()
+
+# Wenn der User einfach nur ENTER drückt ohne was zu schreiben, kriegt das Bild einen Standardnamen
+if not filename_input:
+    filename_input = "messung_standard"
+
+# Sicherstellen, dass die Endung .jpg angehängt wird, falls der User sie vergessen hat
+if not filename_input.lower().endswith(('.jpg', '.jpeg', '.png')):
+    filename_input += ".jpg"
+
+# Bild speichern
+cv2.imwrite(filename_input, result_img)
+print(f"✓ Bild erfolgreich im Projektordner gespeichert als: {filename_input}")
+print("="*50 + "\n")
+
+# Endergebnis als Vorschau anzeigen
+cv2.imshow("Keyence-Style Endergebnis (2 Kreise)", result_img)
+cv2.waitKey(0)
+cv2.destroyAllWindows()
